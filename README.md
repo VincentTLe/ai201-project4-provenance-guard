@@ -35,13 +35,22 @@ cp .env.example .env                # then add your GROQ_API_KEY
 
 ## Detection signals (summary)
 
+Three signals combined by a weighted vote (an ensemble):
+
 1. **Groq LLM judge** — semantic/holistic read of whether text *sounds* AI-generated.
 2. **Stylometric heuristics** — structural statistics (sentence-length variance,
    type-token ratio, punctuation density) that differ between uniform AI prose and
    burstier human writing.
+3. **Lexical AI-tells** — density of LLM-favored filler/hedging phrases and n-gram
+   repetition (lowest weight; weakest on its own).
 
 Full design, architecture diagram, and rationale live in
 [`planning.md`](./planning.md).
+
+## Stretch features targeted
+
+Ensemble detection (the 3-signal vote above), provenance certificate, analytics
+dashboard, and multi-modal support. Each is documented here as it's completed.
 
 *(README sections required for grading — confidence scoring examples, the three
 label variants, rate-limit reasoning, audit-log sample, known limitations, spec

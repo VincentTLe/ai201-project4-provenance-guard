@@ -15,6 +15,17 @@
 *(Milestone 2 expands this file with the full spec: uncertainty math, label text,
 appeals detail, and edge cases. This section is the architecture foundation.)*
 
+### Locked decisions (M1)
+
+- **Storage:** SQLite — a `content_records` table + an `audit_log` table.
+- **Detection signals:** **3** (ensemble), combined by a documented weighted vote —
+  Groq LLM judge (semantic), stylometric heuristics (structural), and a lexical
+  "AI-tell" signal (repetition / clichéd-phrase markers). This satisfies the base
+  requirement (≥2) *and* the *Ensemble detection* stretch.
+- **Stretch features targeted (all 4):** ensemble detection, provenance certificate,
+  analytics dashboard, and multi-modal support. Each will get a planning.md update
+  before it's built and a README write-up when done.
+
 ### Architecture narrative — the path of one submission
 
 A creator's platform sends a piece of text to **`POST /submit`** with the raw
@@ -29,7 +40,9 @@ A creator's platform sends a piece of text to **`POST /submit`** with the raw
 3. **Signal 2 — Stylometric heuristics (structural).** Pure-Python metrics
    (sentence-length variance, type-token ratio, punctuation density) are computed
    locally and mapped to an "AI-likeness" score (`0.0`–`1.0`).
-4. **Confidence scoring.** A weighted combiner merges the two signal scores into
+3b. **Signal 3 — Lexical AI-tells (lexical).** A local scan scores the density of
+   LLM-favored filler/hedging phrases and n-gram repetition (`0.0`–`1.0`).
+4. **Confidence scoring.** A weighted combiner merges the three signal scores into
    one calibrated `ai_probability`. That number is bucketed into one of three
    attribution verdicts: `likely_human`, `uncertain`, `likely_ai`.
 5. **Transparency label.** The verdict + confidence select one of three
@@ -47,8 +60,9 @@ automated re-classification — a human reviewer picks it up from the queue.
 
 ### Detection signals
 
-Two signals that capture **genuinely different properties** — one semantic, one
-structural — so their combination is more informative than either alone.
+Three signals that capture **genuinely different properties** — semantic,
+structural, and lexical — so their combination is more informative than any alone.
+(Two would satisfy the base requirement; the third makes it an ensemble.)
 
 #### Signal 1 — Groq LLM judge (semantic / holistic)
 - **Measures:** whether the text *reads* as machine-generated — coherence that is
@@ -74,12 +88,23 @@ structural — so their combination is more informative than either alone.
   poem built on repetition) and get flagged as AI. It measures *form*, never
   *meaning*, so it can't tell paraphrase from origination.
 
-Because one signal is semantic and the other is structural, they fail in
-*different* situations — the combiner can lean on whichever is more reliable and,
-when they disagree, that disagreement itself becomes a signal of uncertainty.
+#### Signal 3 — Lexical "AI-tell" markers (lexical / phrase-level)
+- **Measures:** density of phrases that correlate with LLM output — filler
+  transitions ("it is important to note", "furthermore", "in conclusion"), hedging
+  boilerplate, and n-gram repetition.
+- **Why it differs human vs AI:** LLMs over-use a recognizable set of connective and
+  hedging phrases; human writing reaches for them far less predictably.
+- **Output:** an `ai_probability` in `[0,1]` from marker density.
+- **Blind spot:** easily gamed (delete the phrases and the score drops) and biased
+  against genuinely formal/academic human writing that legitimately uses them. It's
+  the weakest signal on its own — hence the *lowest weight* in the vote.
 
-> **Extensibility:** the combiner is a weighted vote, so adding a 3rd signal later
-> (the *ensemble detection* stretch) is a config change, not a rewrite.
+Because the three signals are semantic, structural, and lexical, they fail in
+*different* situations — the combiner leans on whichever is more reliable and, when
+they disagree, that disagreement itself becomes a signal of uncertainty.
+
+> **Weighting (draft, finalized in M2):** LLM judge highest, stylometry mid, lexical
+> lowest — a weighted vote so weights are a config change, not a rewrite.
 
 ### The false-positive scenario (traced through the system)
 
@@ -137,13 +162,13 @@ Two flows: **submission** (classify text → label) and **appeal** (contest a ve
 └────────┬────────┘
          │ raw text (+ new content_id)
          ▼
-┌─────────────────────┐        ┌───────────────────────────┐
-│ Signal 1: LLM judge │        │ Signal 2: Stylometry       │
-│   (Groq, semantic)  │        │   (pure Python, structural)│
-└──────────┬──────────┘        └─────────────┬─────────────┘
-   llm_score [0..1]                stylometric_score [0..1]
-           └───────────────┬────────────────┘
-                           ▼
+┌────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
+│ Signal 1: LLM judge│ │ Signal 2: Stylometry │ │ Signal 3: Lexical    │
+│  (Groq, semantic)  │ │ (pure Py, structural)│ │  AI-tells (lexical)  │
+└─────────┬──────────┘ └──────────┬───────────┘ └──────────┬───────────┘
+   llm_score [0..1]      stylometric_score [0..1]   lexical_score [0..1]
+          └──────────────────────┬┴───────────────────────┘
+                                 ▼
                  ┌───────────────────┐
                  │ Confidence scoring│  combined ai_probability [0..1]
                  │  (weighted vote)  │  → verdict bucket
@@ -186,8 +211,8 @@ Two flows: **submission** (classify text → label) and **appeal** (contest a ve
 ```
 
 **Narrative:** In the submission flow, raw text passes the rate limiter, fans out to
-two independent detection signals (semantic LLM + structural stylometry), whose
-scores are merged into one calibrated confidence, bucketed into a verdict, turned
+three independent detection signals (semantic LLM + structural stylometry + lexical
+AI-tells), whose scores are merged into one calibrated confidence, bucketed into a verdict, turned
 into a reader-facing label, and recorded in the audit log before the response
 returns. In the appeal flow, a creator's `content_id` + reasoning flips that
 content's status to `under_review` and appends an appeal record beside the original
