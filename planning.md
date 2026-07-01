@@ -244,11 +244,16 @@ biased against formal human writing, so they get the least say.
 - **LLM judge** — one Groq chat completion, `temperature=0`, a classifier prompt
   that asks for `Probability: <0..1>` and `Reason: <one line>`. Parsed defensively;
   on any parse/API failure it returns `0.5` (abstain — neither accuse nor clear).
-- **Stylometry** — compute three metrics, normalize each to a `[0,1]` "AI-likeness":
-  - *sentence-length variance* (low variance → AI-like),
-  - *type-token ratio* (extreme uniformity → AI-like),
-  - *punctuation density* (very even/sparse → AI-like).
-  Average the three into the signal's `ai_probability`.
+- **Stylometry** — compute three metrics, map each to a `[0,1]` "AI-likeness" with
+  the cutoffs below (linear interpolation between the two bounds; clamp outside),
+  then **average the three** into the signal's `ai_probability`. Cutoffs are
+  *starting values, calibrated against the four test inputs in M4:*
+  - *sentence-length std-dev* (in words): `sd ≤ 3 → 1.0` (very uniform = AI-like),
+    `sd ≥ 12 → 0.0` (bursty = human).
+  - *type-token ratio* (unique/total words, first 100 words): `ttr ≤ 0.45 → 1.0`
+    (repetitive = AI-like), `ttr ≥ 0.75 → 0.0` (diverse = human).
+  - *punctuation variety* (count of distinct types among `. , ; : — ( ) ! ? … "`):
+    `≤ 1 type → 1.0` (flat = AI-like), `≥ 5 types → 0.0` (varied = human).
 - **Lexical AI-tells** — count LLM-favored filler/hedging phrases ("it is important
   to note", "furthermore", "in conclusion", "delve", "tapestry", …) and repeated
   n-grams per 100 words; map density to `[0,1]`.
@@ -258,13 +263,26 @@ biased against formal human writing, so they get the least say.
 ### 2. Uncertainty representation
 
 **What a score means to the system.** `ai_probability` is "how AI-like the evidence
-is." We derive a reader-facing **`confidence`** = how sure we are *of the verdict*:
-- verdict `likely_ai` → `confidence = ai_probability`
-- verdict `likely_human` → `confidence = 1 − ai_probability`
-- verdict `uncertain` → `confidence` reported but framed as low by design
+is." We derive a reader-facing **`confidence`** with **one formula for every verdict**
+— how far the evidence sits from maximal uncertainty (0.5), rescaled to `[0,1]`:
 
-So `ai_probability = 0.5` means "genuinely can't tell" → an **uncertain** verdict,
-never a coin-flip accusation.
+```
+confidence = 2 · |ai_probability − 0.5|      # clamp to [0, 1]
+```
+
+- `ai_probability = 0.50` → `confidence 0.00` (genuinely can't tell → **uncertain**)
+- `ai_probability = 0.95` → `confidence 0.90` (strongly AI)
+- `ai_probability = 0.05` → `confidence 0.90` (strongly human)
+- `ai_probability = 0.71` → `confidence 0.42` (just over the AI line → *honestly* modest)
+
+One formula avoids the earlier ambiguity of "what's the confidence of an *uncertain*
+verdict" — it's simply the distance from 0.5, in whichever direction. `0.5` never
+produces a coin-flip accusation; it produces the lowest possible confidence.
+
+**Confidence bands (drive the label wording, §3):**
+`confidence ≥ 0.60 → "high"` · `0.30–0.60 → "moderate"` · `< 0.30 → "low"`.
+Because the AI verdict starts at `ai_probability ≥ 0.70` (`confidence ≥ 0.40`), a
+borderline AI verdict reads *"moderate"*, not *"high"* — the label never overstates.
 
 **Asymmetric thresholds (false-positive-averse).** It takes *more* evidence to call
 AI than to clear a human:
@@ -284,6 +302,11 @@ mislabel a person.
 average, and confidence is reduced. Honest uncertainty beats a confident average
 that papers over a real split between signals.
 
+**Length floor.** Stylometry needs enough text to be stable:
+- **`< 40` words:** drop the stylometry signal and renormalize the remaining weights
+  over LLM + lexical (`0.50 : 0.20` → `0.714 : 0.286`).
+- **`< 15` words:** too little signal to judge — **force `uncertain`** outright.
+
 **How we'll test it's meaningful (M4):** run the four calibration inputs (clear AI,
 clear human, formal-human, lightly-edited-AI) and confirm they land in *different*
 bands with sensible confidences — not all clustered near 0.5, and no binary flip at
@@ -292,14 +315,17 @@ exactly 0.5.
 ### 3. Transparency label — the three variants (verbatim)
 
 Plain language, honest about uncertainty, and — for the AI case — phrased as
-*possibility*, never accusation. These exact strings ship in the response and README.
+*possibility*, never accusation. The verdict picks the variant; the `{level}` token
+is filled from the confidence band (§2: high / moderate / low). These exact strings
+ship in the response and README; the "high-confidence" variants below show `{level}`
+resolved to **high**.
 
-**High-confidence AI** (`likely_ai`):
+**High-confidence AI** (`likely_ai`, `{level}` = high):
 > 🤖 **Likely AI-generated.** Our detection tools indicate this text was most likely
 > produced with generative AI (confidence: high). This is an automated estimate, not
 > a definitive judgment. If you wrote this yourself, you can appeal — see below.
 
-**High-confidence human** (`likely_human`):
+**High-confidence human** (`likely_human`, `{level}` = high):
 > ✍️ **Likely human-written.** Our detection tools found no strong signs of AI
 > generation in this text (confidence: high). No attribution tool is perfect, but
 > nothing here suggests this wasn't written by a person.
@@ -308,6 +334,10 @@ Plain language, honest about uncertainty, and — for the AI case — phrased as
 > ❓ **Attribution uncertain.** Our tools couldn't confidently tell whether this text
 > was written by a person or generated by AI. Please treat this as inconclusive — we
 > deliberately avoid labeling a human's work as AI when the evidence is mixed.
+
+*(Template form: the AI and human variants read `(confidence: {level})`, so a
+borderline `likely_ai` at confidence 0.42 displays "(confidence: moderate)". The
+`uncertain` variant carries no level — being inconclusive is its whole message.)*
 
 ### 4. Appeals workflow
 
@@ -367,8 +397,9 @@ How each implementation milestone will use an AI coding tool, and how output is 
 - **Spec sections provided:** *Detection signals* (§1, all) + *Uncertainty
   representation* (§2) + the diagram.
 - **Ask it to generate:** `stylometry_signal(text)`, `lexical_signal(text)`, and the
-  `combine(llm, stylo, lexical) -> {ai_probability, verdict, confidence}` function
-  implementing the exact weights, thresholds, and disagreement guard from §2.
+  `combine(llm, stylo, lexical, word_count) -> {ai_probability, verdict, confidence}`
+  implementing the exact weights, asymmetric thresholds, `confidence = 2·|p−0.5|`
+  formula, disagreement guard, and length floor from §2.
 - **Verify:** confirm the generated thresholds/weights match §2 exactly (AI tools
   drift here); run the four calibration inputs and check they land in different bands
   with sensible confidences; print per-signal scores to find any misbehaving signal.

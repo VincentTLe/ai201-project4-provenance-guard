@@ -49,7 +49,10 @@ Full design, architecture diagram, and rationale live in
 
 ## Transparency label — the three variants
 
-The label shown to a reader changes with the verdict. Verbatim text:
+The label shown to a reader changes with the verdict; the AI and human variants show
+a confidence word (**high / moderate / low**) derived from the score, so a borderline
+result reads "(confidence: moderate)" rather than overstating. Verbatim text (shown
+here with confidence = high):
 
 | Verdict | Label text |
 |---|---|
