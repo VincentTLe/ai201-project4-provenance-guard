@@ -182,6 +182,13 @@ def log():
     return jsonify({"entries": db.get_recent_log()})
 
 
+@app.route("/analytics", methods=["GET"])
+def analytics():
+    """Stretch: detection-pattern dashboard — verdict distribution, appeal rate,
+    and mean confidence, read straight from the audit store."""
+    return jsonify(db.get_analytics())
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})

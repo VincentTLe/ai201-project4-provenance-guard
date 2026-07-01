@@ -429,7 +429,14 @@ scripted floods.
    weighting and disagreement rule are the documented voting approach.
 2. **Provenance certificate** — a "verified human" credential a creator earns via an
    extra step; stored on the `content_record` and surfaced in the label/response.
-3. **Analytics dashboard** — a `GET /analytics` (or small HTML) reading the audit log:
-   verdict distribution, appeal rate, + one more metric (e.g. mean confidence).
+3. **Analytics dashboard** — **[building now]** a `GET /analytics` endpoint reading
+   straight from SQLite. Metrics:
+   - **Verdict distribution** — count of `likely_ai` / `uncertain` / `likely_human`.
+   - **Appeal rate** — appeals ÷ total classifications, plus raw appeal count and how
+     many records are currently `under_review`.
+   - **Mean confidence** (the extra metric) — average confidence across all
+     classifications, plus mean combined `ai_probability`, to show at a glance whether
+     the system is landing decisive or hedged verdicts overall.
+   Pure read, no new storage; computed with SQL aggregates in `db.get_analytics()`.
 4. **Multi-modal support** — extend the pipeline to a second content type (image
    description / structured metadata) alongside text.

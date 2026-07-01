@@ -309,6 +309,23 @@ scope, not bugs).
 
 - **Ensemble detection** ✅ — the 3-signal weighted vote above, with the documented
   weighting and the asymmetric disagreement rule as the voting/override logic.
-- **Provenance certificate**, **analytics dashboard**, **multi-modal support** —
-  planned; `planning.md` is updated before each is built and this section documents
-  each as it ships.
+- **Analytics dashboard** ✅ — `GET /analytics` reads straight from SQLite and returns
+  detection patterns and health metrics: verdict distribution, appeal rate (+ raw
+  appeal count and how many records are `under_review`), and — the extra metric — mean
+  confidence and mean combined `ai_probability`, which together show at a glance
+  whether the system is landing decisive or hedged verdicts. Example:
+
+  ```json
+  {
+    "total_classifications": 3,
+    "verdict_distribution": {"likely_ai": 1, "uncertain": 1, "likely_human": 1},
+    "appeals": 1,
+    "under_review": 1,
+    "appeal_rate": 0.3333,
+    "mean_confidence": 0.3723,
+    "mean_ai_probability": 0.525
+  }
+  ```
+
+- **Provenance certificate**, **multi-modal support** — planned; `planning.md` is
+  updated before each is built and this section documents each as it ships.

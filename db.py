@@ -137,6 +137,46 @@ def add_audit_entry(content_id: str, event_type: str, detail: dict) -> None:
         )
 
 
+def get_analytics() -> dict:
+    """Aggregate detection stats for the analytics dashboard (GET /analytics).
+
+    Reads straight from SQLite — no new storage. Returns verdict distribution,
+    appeal rate, and mean confidence / ai_probability.
+    """
+    with _db() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM content_records"
+        ).fetchone()["n"]
+
+        dist_rows = conn.execute(
+            "SELECT attribution, COUNT(*) AS n FROM content_records GROUP BY attribution"
+        ).fetchall()
+        verdict_distribution = {row["attribution"]: row["n"] for row in dist_rows}
+
+        under_review = conn.execute(
+            "SELECT COUNT(*) AS n FROM content_records WHERE status = 'under_review'"
+        ).fetchone()["n"]
+
+        appeals = conn.execute(
+            "SELECT COUNT(*) AS n FROM audit_log WHERE event_type = 'appeal'"
+        ).fetchone()["n"]
+
+        means = conn.execute(
+            "SELECT AVG(confidence) AS c, AVG(ai_probability) AS p FROM content_records"
+        ).fetchone()
+
+    appeal_rate = round(appeals / total, 4) if total else 0.0
+    return {
+        "total_classifications": total,
+        "verdict_distribution": verdict_distribution,
+        "appeals": appeals,
+        "under_review": under_review,
+        "appeal_rate": appeal_rate,
+        "mean_confidence": round(means["c"], 4) if means["c"] is not None else None,
+        "mean_ai_probability": round(means["p"], 4) if means["p"] is not None else None,
+    }
+
+
 def get_recent_log(limit: int = 20) -> list[dict]:
     """Return the most recent audit entries (newest first), detail flattened in."""
     with _db() as conn:
