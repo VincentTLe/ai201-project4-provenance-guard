@@ -449,5 +449,15 @@ scripted floods.
      classifications, plus mean combined `ai_probability`, to show at a glance whether
      the system is landing decisive or hedged verdicts overall.
    Pure read, no new storage; computed with SQL aggregates in `db.get_analytics()`.
-4. **Multi-modal support** — extend the pipeline to a second content type (image
-   description / structured metadata) alongside text.
+4. **Multi-modal support** — **[building now]** extend `/submit` with an optional
+   `content_type` field (default `"text"`) that also accepts `"image_description"`
+   (an image caption / alt-text).
+   - **Why it's a genuinely different modality, not just "text again":** captions are
+     short, descriptive, and structurally unlike prose, so **stylometry is not
+     applicable** (dropped for this type) and the **LLM signal uses a caption-specific
+     prompt** — it looks for AI-caption tells (exhaustive objective scene enumeration,
+     generic aesthetic adjectives, "this image shows…" framing, no personal reaction)
+     rather than essay tells. Lexical still applies.
+   - **Combination:** for `image_description` the weighted vote runs over LLM + lexical
+     only (renormalized); everything downstream (thresholds, confidence, label, appeal,
+     audit log) is unchanged. `content_type` is recorded in the response and audit log.

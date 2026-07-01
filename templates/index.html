@@ -65,6 +65,13 @@
         <label for="creator">Creator ID</label>
         <input id="creator" value="demo-creator" />
       </div>
+      <div>
+        <label for="ctype">Content type</label>
+        <select id="ctype" style="width:100%;background:#0f1117;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:11px 13px;font-size:.95rem;">
+          <option value="text">Text (prose)</option>
+          <option value="image_description">Image description / caption</option>
+        </select>
+      </div>
       <button id="submitBtn" onclick="submitText()">Analyze</button>
     </div>
     <div id="submitMsg"></div>
@@ -127,6 +134,7 @@ let currentId = null;
 async function submitText() {
   const text = document.getElementById('text').value;
   const creator = document.getElementById('creator').value;
+  const contentType = document.getElementById('ctype').value;
   const msg = document.getElementById('submitMsg');
   const btn = document.getElementById('submitBtn');
   msg.textContent = ''; msg.className = '';
@@ -136,7 +144,7 @@ async function submitText() {
   try {
     const res = await fetch('/submit', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ text, creator_id: creator })
+      body: JSON.stringify({ text, creator_id: creator, content_type: contentType })
     });
     const data = await res.json();
     if (res.status === 429) { msg.textContent = 'Rate limit reached (429). Try again shortly.'; msg.className='err'; return; }
@@ -159,7 +167,8 @@ function render(d) {
   document.getElementById('confVal').textContent = '(' + d.confidence.toFixed(2) + ')';
   document.getElementById('confBar').style.width = confPct + '%';
   document.getElementById('sigLlm').textContent = d.signals.llm.toFixed(2);
-  document.getElementById('sigSty').textContent = d.signals.stylometric.toFixed(2);
+  document.getElementById('sigSty').textContent =
+    d.signals.stylometric == null ? 'n/a' : d.signals.stylometric.toFixed(2);
   document.getElementById('sigLex').textContent = d.signals.lexical.toFixed(2);
   document.getElementById('cid').textContent = d.content_id;
   document.getElementById('prob').textContent = d.ai_probability.toFixed(2);

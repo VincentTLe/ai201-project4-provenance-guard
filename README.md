@@ -68,7 +68,7 @@ reader-facing label, with a one-click **Appeal** and links to the log/analytics.
 | Method & path | Body | Returns |
 |---|---|---|
 | `GET /` | — | Demo web UI (HTML) |
-| `POST /submit` | `{ "text": str, "creator_id": str }` | `content_id`, `attribution`, `confidence`, `ai_probability`, `signals{llm,stylometric,lexical}`, `label` |
+| `POST /submit` | `{ "text": str, "creator_id": str, "content_type"?: "text"\|"image_description" }` | `content_id`, `content_type`, `attribution`, `confidence`, `ai_probability`, `signals{llm,stylometric,lexical}`, `label`, `provenance` |
 | `POST /appeal` | `{ "content_id": str, "creator_reasoning": str }` | `content_id`, `status: "under_review"`, `message` |
 | `POST /verify/start` | `{ "creator_id": str }` | `challenge_id`, `phrase`, `instructions` |
 | `POST /verify/complete` | `{ "challenge_id": str, "response": str }` | `certificate_id`, `status: "verified_human"`, `badge` |
@@ -370,5 +370,21 @@ scope, not bugs).
   Verified end-to-end: unverified submit → `verified_human: false`; wrong pledge → 400;
   correct pledge → certificate issued; subsequent submit → `verified_human: true`.
 
-- **Multi-modal support** — planned; `planning.md` is updated before it's built and
-  this section documents it when it ships.
+- **Multi-modal support** ✅ — `POST /submit` accepts an optional `content_type`
+  (default `"text"`; also `"image_description"` for a caption / alt-text). It's a
+  genuinely different modality, not just text again:
+  - **Stylometry is dropped** (captions are short and structurally unlike prose).
+  - **The LLM judge uses a caption-specific prompt** that looks for *caption* AI tells
+    (exhaustive objective scene enumeration, generic aesthetic adjectives, "this image
+    shows…" framing, no personal reaction) rather than essay tells.
+  - **The vote is LLM-dominant (0.80 / 0.20 with lexical)** and the prose-mode
+    disagreement guard and length floors are skipped, because the prose-oriented
+    lexical signal is near-zero for captions and would otherwise create false
+    disagreement or force short captions to "uncertain."
+  - `content_type` is recorded in the response and audit log; everything downstream
+    (thresholds, confidence, label, appeal) is unchanged.
+
+  Verified: an AI-style caption ("A stunning image showcasing a vibrant sunset over a
+  serene ocean…") → `likely_ai`; a human caption ("finally caught the sunrise after
+  like 3 tries this week, freezing but worth it") → `likely_human`; an invalid
+  `content_type` → `400`.

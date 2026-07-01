@@ -57,21 +57,27 @@ def submit():
     if not text or not creator_id:
         return jsonify({"error": "Both 'text' and 'creator_id' are required."}), 400
 
+    # Multi-modal (stretch): default "text"; "image_description" retunes the pipeline.
+    content_type = data.get("content_type", "text")
+    if content_type not in ("text", "image_description"):
+        return jsonify({"error": "content_type must be 'text' or 'image_description'."}), 400
+
     content_id = str(uuid.uuid4())
     timestamp = db.utc_now()
     word_count = len(text.split())
 
-    # --- Multi-signal detection pipeline ---
-    llm = llm_signal(text)
-    stylo = stylometry_signal(text)
+    # --- Multi-signal detection pipeline (adapts to the modality) ---
+    llm = llm_signal(text, mode=content_type)
     lexical = lexical_signal(text)
-
-    result = combine(
-        llm["ai_probability"],
-        stylo["ai_probability"],
-        lexical["ai_probability"],
-        word_count,
-    )
+    if content_type == "image_description":
+        # Captions are short/structurally unlike prose — stylometry doesn't apply.
+        stylo = {"ai_probability": None}
+        result = combine(llm["ai_probability"], 0.0, lexical["ai_probability"],
+                         word_count, use_stylometry=False)
+    else:
+        stylo = stylometry_signal(text)
+        result = combine(llm["ai_probability"], stylo["ai_probability"],
+                         lexical["ai_probability"], word_count)
     attribution = result["verdict"]
     confidence = result["confidence"]
     label = make_label(attribution, confidence)
@@ -107,6 +113,7 @@ def submit():
             "content_id": content_id,
             "creator_id": creator_id,
             "timestamp": timestamp,
+            "content_type": content_type,
             "attribution": attribution,
             "confidence": confidence,
             "ai_probability": result["ai_probability"],
@@ -124,6 +131,7 @@ def submit():
     return jsonify(
         {
             "content_id": content_id,
+            "content_type": content_type,
             "attribution": attribution,
             "confidence": confidence,
             "ai_probability": result["ai_probability"],
