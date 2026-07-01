@@ -12,7 +12,7 @@ endpoint (M5), and rate limiting (M5) build on this skeleton.
 """
 import uuid
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -32,6 +32,12 @@ limiter = Limiter(
     default_limits=[],
     storage_uri="memory://",
 )
+
+
+@app.route("/", methods=["GET"])
+def index():
+    """Minimal web UI for demoing the API (submit + appeal + links to log/analytics)."""
+    return render_template("index.html")
 
 
 @app.route("/submit", methods=["POST"])

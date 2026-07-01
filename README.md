@@ -59,13 +59,19 @@ cp .env.example .env                # then add your GROQ_API_KEY
 python app.py                       # serves on http://127.0.0.1:5000
 ```
 
+Then open **http://127.0.0.1:5000/** in a browser for the demo web UI — paste text,
+click **Analyze**, and see the verdict, confidence, per-signal scores, and the
+reader-facing label, with a one-click **Appeal** and links to the log/analytics.
+
 ## API reference
 
 | Method & path | Body | Returns |
 |---|---|---|
+| `GET /` | — | Demo web UI (HTML) |
 | `POST /submit` | `{ "text": str, "creator_id": str }` | `content_id`, `attribution`, `confidence`, `ai_probability`, `signals{llm,stylometric,lexical}`, `label` |
 | `POST /appeal` | `{ "content_id": str, "creator_reasoning": str }` | `content_id`, `status: "under_review"`, `message` |
 | `GET /log` | — | `{ entries: [ …recent audit records… ] }` |
+| `GET /analytics` | — | Detection-pattern dashboard (see Stretch features) |
 
 Example:
 
@@ -237,6 +243,23 @@ returns recent entries as JSON. Sample (a classification and an appeal):
 The appeal is logged **beside** the decision it contests, with the full signal
 breakdown, so a human reviewer opening the queue (content records where
 `status = under_review`) sees everything needed to uphold or overturn by hand.
+
+---
+
+## Appeals workflow
+
+A creator who disputes a classification calls `POST /appeal` with the `content_id`
+(returned by `/submit`) and their `creator_reasoning`. The endpoint:
+
+1. Validates input and returns `404` if the `content_id` is unknown.
+2. Flips that content's status to **`under_review`**.
+3. Appends an `appeal` entry to the audit log containing the creator's reasoning
+   **plus** the original verdict, confidence, and all three signal scores.
+4. Returns a confirmation `{ content_id, status: "under_review", message }`.
+
+There is **no automated re-classification** — a human moderator owns the outcome. The
+review queue is simply the content records with `status = under_review`, each carrying
+the full original decision and the creator's argument side by side.
 
 ---
 

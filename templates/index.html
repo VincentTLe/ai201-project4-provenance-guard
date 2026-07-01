@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Provenance Guard</title>
+<style>
+  :root {
+    --bg:#0f1117; --card:#181b23; --line:#262a35; --text:#e6e8ee; --muted:#9aa3b2;
+    --ai:#ef4444; --human:#22c55e; --uncertain:#f59e0b; --accent:#6366f1;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; line-height:1.5; }
+  .wrap { max-width:820px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:1.7rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; font-size:.95rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:20px; margin-bottom:18px; }
+  label { display:block; font-size:.8rem; color:var(--muted); margin:0 0 6px;
+    text-transform:uppercase; letter-spacing:.05em; }
+  textarea, input {
+    width:100%; background:#0f1117; border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:11px 13px; font-size:.95rem; font-family:inherit; }
+  textarea { min-height:120px; resize:vertical; }
+  .row { display:flex; gap:12px; align-items:end; margin-top:12px; }
+  .row > div { flex:1; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:9px;
+    padding:11px 20px; font-size:.95rem; font-weight:600; cursor:pointer; white-space:nowrap; }
+  button:hover { filter:brightness(1.1); }
+  button.secondary { background:#2a2f3c; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .hidden { display:none; }
+  .badge { display:inline-block; padding:5px 14px; border-radius:999px; font-weight:700;
+    font-size:.85rem; letter-spacing:.04em; }
+  .badge.likely_ai { background:rgba(239,68,68,.15); color:var(--ai); border:1px solid var(--ai); }
+  .badge.likely_human { background:rgba(34,197,94,.15); color:var(--human); border:1px solid var(--human); }
+  .badge.uncertain { background:rgba(245,158,11,.15); color:var(--uncertain); border:1px solid var(--uncertain); }
+  .label-box { margin:14px 0; padding:13px 15px; border-radius:10px; background:#0f1117;
+    border-left:4px solid var(--accent); font-size:.95rem; }
+  .conf { margin:14px 0 6px; }
+  .bar { height:9px; background:#0f1117; border-radius:99px; overflow:hidden; border:1px solid var(--line); }
+  .bar > span { display:block; height:100%; background:var(--accent); }
+  .signals { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:16px; }
+  .sig { background:#0f1117; border:1px solid var(--line); border-radius:9px; padding:10px 12px; }
+  .sig .name { font-size:.72rem; color:var(--muted); text-transform:uppercase; }
+  .sig .val { font-size:1.25rem; font-weight:700; margin-top:2px; }
+  .meta { color:var(--muted); font-size:.8rem; margin-top:12px; }
+  .links a { color:var(--accent); text-decoration:none; margin-right:16px; font-size:.9rem; }
+  .ok { color:var(--human); font-size:.9rem; margin-top:10px; }
+  .err { color:var(--ai); font-size:.9rem; margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛡️ Provenance Guard</h1>
+  <p class="sub">Multi-signal AI-content attribution — with honest uncertainty and an appeals path.</p>
+
+  <div class="card">
+    <label for="text">Content to analyze</label>
+    <textarea id="text" placeholder="Paste a poem, story excerpt, or blog post…"></textarea>
+    <div class="row">
+      <div>
+        <label for="creator">Creator ID</label>
+        <input id="creator" value="demo-creator" />
+      </div>
+      <button id="submitBtn" onclick="submitText()">Analyze</button>
+    </div>
+    <div id="submitMsg"></div>
+  </div>
+
+  <div id="result" class="card hidden">
+    <span id="verdict" class="badge"></span>
+    <div id="label" class="label-box"></div>
+
+    <div class="conf">
+      <label>Confidence <span id="confVal"></span></label>
+      <div class="bar"><span id="confBar"></span></div>
+    </div>
+
+    <div class="signals">
+      <div class="sig"><div class="name">LLM (semantic)</div><div class="val" id="sigLlm">–</div></div>
+      <div class="sig"><div class="name">Stylometry</div><div class="val" id="sigSty">–</div></div>
+      <div class="sig"><div class="name">Lexical</div><div class="val" id="sigLex">–</div></div>
+    </div>
+
+    <div class="meta">content_id: <code id="cid"></code> · combined ai_probability: <span id="prob"></span></div>
+  </div>
+
+  <div id="appealCard" class="card hidden">
+    <label for="reason">Disagree? Appeal this classification</label>
+    <textarea id="reason" placeholder="Explain why you believe this is wrong…">I wrote this myself.</textarea>
+    <div class="row">
+      <div></div>
+      <button class="secondary" onclick="appeal()">Submit appeal</button>
+    </div>
+    <div id="appealMsg"></div>
+  </div>
+
+  <div class="card links">
+    <a href="/log" target="_blank">📋 View audit log</a>
+    <a href="/analytics" target="_blank">📊 Analytics dashboard</a>
+  </div>
+</div>
+
+<script>
+let currentId = null;
+
+async function submitText() {
+  const text = document.getElementById('text').value;
+  const creator = document.getElementById('creator').value;
+  const msg = document.getElementById('submitMsg');
+  const btn = document.getElementById('submitBtn');
+  msg.textContent = ''; msg.className = '';
+  if (!text.trim()) { msg.textContent = 'Please enter some text.'; msg.className = 'err'; return; }
+
+  btn.disabled = true; btn.textContent = 'Analyzing…';
+  try {
+    const res = await fetch('/submit', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text, creator_id: creator })
+    });
+    const data = await res.json();
+    if (res.status === 429) { msg.textContent = 'Rate limit reached (429). Try again shortly.'; msg.className='err'; return; }
+    if (!res.ok) { msg.textContent = data.error || 'Error'; msg.className='err'; return; }
+    render(data);
+  } catch (e) {
+    msg.textContent = 'Request failed: ' + e; msg.className = 'err';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Analyze';
+  }
+}
+
+function render(d) {
+  currentId = d.content_id;
+  const v = document.getElementById('verdict');
+  v.className = 'badge ' + d.attribution;
+  v.textContent = d.attribution.replace('_',' ').toUpperCase();
+  document.getElementById('label').textContent = d.label;
+  const confPct = Math.round(d.confidence * 100);
+  document.getElementById('confVal').textContent = '(' + d.confidence.toFixed(2) + ')';
+  document.getElementById('confBar').style.width = confPct + '%';
+  document.getElementById('sigLlm').textContent = d.signals.llm.toFixed(2);
+  document.getElementById('sigSty').textContent = d.signals.stylometric.toFixed(2);
+  document.getElementById('sigLex').textContent = d.signals.lexical.toFixed(2);
+  document.getElementById('cid').textContent = d.content_id;
+  document.getElementById('prob').textContent = d.ai_probability.toFixed(2);
+  document.getElementById('result').classList.remove('hidden');
+  document.getElementById('appealCard').classList.remove('hidden');
+  document.getElementById('appealMsg').textContent = '';
+}
+
+async function appeal() {
+  const reason = document.getElementById('reason').value;
+  const msg = document.getElementById('appealMsg');
+  msg.textContent = ''; msg.className = '';
+  if (!currentId) return;
+  try {
+    const res = await fetch('/appeal', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ content_id: currentId, creator_reasoning: reason })
+    });
+    const data = await res.json();
+    if (!res.ok) { msg.textContent = data.error || 'Error'; msg.className='err'; return; }
+    msg.textContent = '✓ ' + data.message + ' (status: ' + data.status + ')';
+    msg.className = 'ok';
+  } catch (e) {
+    msg.textContent = 'Request failed: ' + e; msg.className = 'err';
+  }
+}
+</script>
+</body>
+</html>
