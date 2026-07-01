@@ -117,6 +117,15 @@ def get_content_record(content_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def update_content_status(content_id: str, status: str) -> None:
+    """Set a content record's status (e.g. 'under_review' when an appeal is filed)."""
+    with _db() as conn:
+        conn.execute(
+            "UPDATE content_records SET status = ? WHERE content_id = ?",
+            (status, content_id),
+        )
+
+
 def add_audit_entry(content_id: str, event_type: str, detail: dict) -> None:
     """Append one structured event (classification or appeal) to the audit log."""
     with _db() as conn:

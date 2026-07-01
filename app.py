@@ -13,18 +13,29 @@ endpoint (M5), and rate limiting (M5) build on this skeleton.
 import uuid
 
 from flask import Flask, jsonify, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 import db
 from detection import combine, lexical_signal, llm_signal, stylometry_signal
+from labels import make_label
 
 app = Flask(__name__)
 db.init_db()
 
-# M5 placeholder — the reader-facing transparency label is generated in Milestone 5.
-PLACEHOLDER_LABEL = "Transparency label pending (Milestone 5)."
+# Rate limiting (see README for chosen limits + reasoning). In-memory storage is
+# fine for local/dev; a real deployment would use Redis so limits survive restarts
+# and span multiple workers.
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
 
 
 @app.route("/submit", methods=["POST"])
+@limiter.limit("10 per minute;100 per day")
 def submit():
     data = request.get_json(silent=True) or {}
     raw_text = data.get("text")
@@ -56,6 +67,7 @@ def submit():
     )
     attribution = result["verdict"]
     confidence = result["confidence"]
+    label = make_label(attribution, confidence)
     status = "classified"
 
     # --- Persist content record ---
@@ -105,7 +117,62 @@ def submit():
                 "stylometric": stylo["ai_probability"],
                 "lexical": lexical["ai_probability"],
             },
-            "label": PLACEHOLDER_LABEL,  # real label at M5
+            "label": label,
+        }
+    )
+
+
+@app.route("/appeal", methods=["POST"])
+def appeal():
+    """A creator contests a classification. Flips status to 'under_review' and logs
+    the appeal alongside the original decision. No automated re-classification —
+    a human reviewer owns the outcome. See planning.md §4.
+    """
+    data = request.get_json(silent=True) or {}
+    content_id = data.get("content_id")
+    reasoning = data.get("creator_reasoning")
+
+    if not isinstance(content_id, str) or not isinstance(reasoning, str):
+        return jsonify({"error": "'content_id' and 'creator_reasoning' must be strings."}), 400
+    content_id = content_id.strip()
+    reasoning = reasoning.strip()
+    if not content_id or not reasoning:
+        return jsonify({"error": "Both 'content_id' and 'creator_reasoning' are required."}), 400
+
+    record = db.get_content_record(content_id)
+    if record is None:
+        return jsonify({"error": f"No content found with id '{content_id}'."}), 404
+
+    db.update_content_status(content_id, "under_review")
+    timestamp = db.utc_now()
+
+    # Log the appeal beside the original decision it contests.
+    db.add_audit_entry(
+        content_id,
+        "appeal",
+        {
+            "content_id": content_id,
+            "creator_id": record["creator_id"],
+            "timestamp": timestamp,
+            "event": "appeal_filed",
+            "creator_reasoning": reasoning,
+            "original_attribution": record["attribution"],
+            "original_confidence": record["confidence"],
+            "original_ai_probability": record["ai_probability"],
+            "llm_score": record["llm_score"],
+            "stylometric_score": record["stylometric_score"],
+            "lexical_score": record["lexical_score"],
+            "status": "under_review",
+        },
+    )
+
+    return jsonify(
+        {
+            "content_id": content_id,
+            "status": "under_review",
+            "message": "Your appeal has been received and this content is now under "
+                       "review by a human moderator. The original automated "
+                       "classification has been logged alongside your appeal.",
         }
     )
 
