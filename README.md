@@ -70,6 +70,8 @@ reader-facing label, with a one-click **Appeal** and links to the log/analytics.
 | `GET /` | — | Demo web UI (HTML) |
 | `POST /submit` | `{ "text": str, "creator_id": str }` | `content_id`, `attribution`, `confidence`, `ai_probability`, `signals{llm,stylometric,lexical}`, `label` |
 | `POST /appeal` | `{ "content_id": str, "creator_reasoning": str }` | `content_id`, `status: "under_review"`, `message` |
+| `POST /verify/start` | `{ "creator_id": str }` | `challenge_id`, `phrase`, `instructions` |
+| `POST /verify/complete` | `{ "challenge_id": str, "response": str }` | `certificate_id`, `status: "verified_human"`, `badge` |
 | `GET /log` | — | `{ entries: [ …recent audit records… ] }` |
 | `GET /analytics` | — | Detection-pattern dashboard (see Stretch features) |
 
@@ -350,5 +352,23 @@ scope, not bugs).
   }
   ```
 
-- **Provenance certificate**, **multi-modal support** — planned; `planning.md` is
-  updated before each is built and this section documents each as it ships.
+- **Provenance certificate** ✅ — a "verified human" credential a creator earns through
+  an extra verification step:
+  - `POST /verify/start {creator_id}` issues a random **pledge sentence** + a
+    `challenge_id`.
+  - The creator must type that sentence back to `POST /verify/complete
+    {challenge_id, response}`. Typing a specific phrase back is a deliberate human
+    action — a lightweight, self-contained stand-in for a real identity/liveness check
+    (a production system would swap in proper KYC). On a match, a certificate
+    (`cert_id`, `creator_id`, `issued_at`, status `verified_human`) is stored.
+  - **How it's displayed:** every `/submit` response now carries
+    `provenance: {verified_human, certificate_id}`; the audit log records it; and the
+    web UI shows a **✔ Verified Human Creator** chip beside the verdict. The credential
+    is deliberately *independent* of the AI verdict — it certifies "this account proved
+    it's a human creator," not "this specific text is human."
+
+  Verified end-to-end: unverified submit → `verified_human: false`; wrong pledge → 400;
+  correct pledge → certificate issued; subsequent submit → `verified_human: true`.
+
+- **Multi-modal support** — planned; `planning.md` is updated before it's built and
+  this section documents it when it ships.

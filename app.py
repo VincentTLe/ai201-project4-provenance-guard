@@ -19,6 +19,7 @@ from flask_limiter.util import get_remote_address
 import db
 from detection import combine, lexical_signal, llm_signal, stylometry_signal
 from labels import make_label
+from verification import new_challenge_phrase, responses_match
 
 app = Flask(__name__)
 db.init_db()
@@ -76,6 +77,13 @@ def submit():
     label = make_label(attribution, confidence)
     status = "classified"
 
+    # Provenance certificate (stretch): flag whether this creator is a verified human.
+    cert = db.get_active_certificate(creator_id)
+    provenance = {
+        "verified_human": cert is not None,
+        "certificate_id": cert["cert_id"] if cert else None,
+    }
+
     # --- Persist content record ---
     db.create_content_record(
         content_id=content_id,
@@ -108,6 +116,7 @@ def submit():
             "signal_spread": result["signal_spread"],
             "llm_rationale": llm["rationale"],
             "scoring_notes": result["notes"],
+            "verified_human": provenance["verified_human"],
             "status": status,
         },
     )
@@ -124,6 +133,7 @@ def submit():
                 "lexical": lexical["ai_probability"],
             },
             "label": label,
+            "provenance": provenance,
         }
     )
 
@@ -179,6 +189,63 @@ def appeal():
             "message": "Your appeal has been received and this content is now under "
                        "review by a human moderator. The original automated "
                        "classification has been logged alongside your appeal.",
+        }
+    )
+
+
+@app.route("/verify/start", methods=["POST"])
+def verify_start():
+    """Stretch (provenance certificate): begin human verification. Issues a random
+    pledge sentence the creator must type back to /verify/complete."""
+    data = request.get_json(silent=True) or {}
+    creator_id = data.get("creator_id")
+    if not isinstance(creator_id, str) or not creator_id.strip():
+        return jsonify({"error": "'creator_id' (string) is required."}), 400
+    creator_id = creator_id.strip()
+
+    challenge_id = str(uuid.uuid4())
+    phrase = new_challenge_phrase()
+    db.create_challenge(challenge_id, creator_id, phrase, db.utc_now())
+    return jsonify(
+        {
+            "challenge_id": challenge_id,
+            "creator_id": creator_id,
+            "phrase": phrase,
+            "instructions": "Type the sentence above back exactly to confirm you are a "
+                            "human creator, then POST it to /verify/complete.",
+        }
+    )
+
+
+@app.route("/verify/complete", methods=["POST"])
+def verify_complete():
+    """Stretch: finish verification. If the typed-back response matches the issued
+    phrase, issue a 'verified human' certificate for the creator."""
+    data = request.get_json(silent=True) or {}
+    challenge_id = data.get("challenge_id")
+    response = data.get("response")
+    if not isinstance(challenge_id, str) or not isinstance(response, str):
+        return jsonify({"error": "'challenge_id' and 'response' (strings) are required."}), 400
+
+    challenge = db.get_challenge(challenge_id.strip())
+    if challenge is None:
+        return jsonify({"error": "Unknown challenge_id."}), 404
+    if challenge["used"]:
+        return jsonify({"error": "This challenge has already been used."}), 400
+    if not responses_match(challenge["phrase"], response):
+        return jsonify({"error": "Response did not match the pledge sentence. Verification failed."}), 400
+
+    db.mark_challenge_used(challenge_id.strip())
+    cert_id = "cert-" + uuid.uuid4().hex[:12]
+    issued_at = db.utc_now()
+    db.issue_certificate(cert_id, challenge["creator_id"], issued_at)
+    return jsonify(
+        {
+            "certificate_id": cert_id,
+            "creator_id": challenge["creator_id"],
+            "status": "verified_human",
+            "issued_at": issued_at,
+            "badge": "✔ Verified Human Creator",
         }
     )
 

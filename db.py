@@ -75,6 +75,28 @@ def init_db() -> None:
             )
             """
         )
+        # Provenance-certificate tables (stretch feature).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS certificates (
+                cert_id    TEXT PRIMARY KEY,
+                creator_id TEXT NOT NULL,
+                issued_at  TEXT NOT NULL,
+                status     TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS challenges (
+                challenge_id TEXT PRIMARY KEY,
+                creator_id   TEXT NOT NULL,
+                phrase       TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                used         INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
 
 
 def create_content_record(
@@ -135,6 +157,48 @@ def add_audit_entry(content_id: str, event_type: str, detail: dict) -> None:
             (content_id, event_type, detail.get("timestamp", utc_now()),
              json.dumps(detail)),
         )
+
+
+def create_challenge(challenge_id: str, creator_id: str, phrase: str, created_at: str) -> None:
+    with _db() as conn:
+        conn.execute(
+            "INSERT INTO challenges (challenge_id, creator_id, phrase, created_at, used) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (challenge_id, creator_id, phrase, created_at),
+        )
+
+
+def get_challenge(challenge_id: str) -> dict | None:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT * FROM challenges WHERE challenge_id = ?", (challenge_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def mark_challenge_used(challenge_id: str) -> None:
+    with _db() as conn:
+        conn.execute("UPDATE challenges SET used = 1 WHERE challenge_id = ?", (challenge_id,))
+
+
+def issue_certificate(cert_id: str, creator_id: str, issued_at: str) -> None:
+    with _db() as conn:
+        conn.execute(
+            "INSERT INTO certificates (cert_id, creator_id, issued_at, status) "
+            "VALUES (?, ?, ?, 'verified_human')",
+            (cert_id, creator_id, issued_at),
+        )
+
+
+def get_active_certificate(creator_id: str) -> dict | None:
+    """Return the creator's most recent active certificate, or None."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT * FROM certificates WHERE creator_id = ? AND status = 'verified_human' "
+            "ORDER BY issued_at DESC LIMIT 1",
+            (creator_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_analytics() -> dict:

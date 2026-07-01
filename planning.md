@@ -427,8 +427,19 @@ scripted floods.
 
 1. **Ensemble detection** — satisfied by the 3-signal weighted vote above; the
    weighting and disagreement rule are the documented voting approach.
-2. **Provenance certificate** — a "verified human" credential a creator earns via an
-   extra step; stored on the `content_record` and surfaced in the label/response.
+2. **Provenance certificate** — **[building now]** a "verified human" credential a
+   creator earns through an extra verification step.
+   - **The extra step (challenge/response):** `POST /verify/start` issues a random
+     pledge sentence + `challenge_id`; the creator must type that exact sentence back
+     to `POST /verify/complete`. Typing a specific phrase back is a deliberate human
+     action — a lightweight stand-in for a real identity/liveness check (documented as
+     such). On success a certificate (`cert_id`, `creator_id`, `issued_at`, status
+     `verified_human`) is stored in a new `certificates` table.
+   - **How it's displayed:** on every `/submit`, if the creator has an active
+     certificate the response carries `provenance:{verified_human:true, certificate_id}`,
+     the audit log records it, and the web UI shows a green "✔ Verified Human Creator"
+     chip beside the verdict. The credential is independent of the AI verdict — it says
+     "this account proved it's a human creator," not "this specific text is human."
 3. **Analytics dashboard** — **[building now]** a `GET /analytics` endpoint reading
    straight from SQLite. Metrics:
    - **Verdict distribution** — count of `likely_ai` / `uncertain` / `likely_human`.

@@ -36,6 +36,7 @@
   .badge.likely_ai { background:rgba(239,68,68,.15); color:var(--ai); border:1px solid var(--ai); }
   .badge.likely_human { background:rgba(34,197,94,.15); color:var(--human); border:1px solid var(--human); }
   .badge.uncertain { background:rgba(245,158,11,.15); color:var(--uncertain); border:1px solid var(--uncertain); }
+  .badge.verified { background:rgba(99,102,241,.15); color:var(--accent); border:1px solid var(--accent); margin-left:8px; }
   .label-box { margin:14px 0; padding:13px 15px; border-radius:10px; background:#0f1117;
     border-left:4px solid var(--accent); font-size:.95rem; }
   .conf { margin:14px 0 6px; }
@@ -71,6 +72,7 @@
 
   <div id="result" class="card hidden">
     <span id="verdict" class="badge"></span>
+    <span id="verifiedChip" class="badge verified hidden">✔ VERIFIED HUMAN CREATOR</span>
     <div id="label" class="label-box"></div>
 
     <div class="conf">
@@ -95,6 +97,22 @@
       <button class="secondary" onclick="appeal()">Submit appeal</button>
     </div>
     <div id="appealMsg"></div>
+  </div>
+
+  <div class="card">
+    <label>Provenance certificate — earn a "verified human" credential</label>
+    <div class="row">
+      <div>
+        <input id="verifyCreator" placeholder="creator id to verify" value="demo-creator" />
+      </div>
+      <button class="secondary" onclick="verifyStart()">Start verification</button>
+    </div>
+    <div id="challengeBox" class="hidden" style="margin-top:12px;">
+      <div class="label-box">Type this sentence back exactly:<br><strong id="phrase"></strong></div>
+      <input id="pledge" placeholder="type the sentence here" />
+      <div class="row"><div></div><button onclick="verifyComplete()">Confirm I'm human</button></div>
+    </div>
+    <div id="verifyMsg"></div>
   </div>
 
   <div class="card links">
@@ -145,9 +163,46 @@ function render(d) {
   document.getElementById('sigLex').textContent = d.signals.lexical.toFixed(2);
   document.getElementById('cid').textContent = d.content_id;
   document.getElementById('prob').textContent = d.ai_probability.toFixed(2);
+  const chip = document.getElementById('verifiedChip');
+  chip.classList.toggle('hidden', !(d.provenance && d.provenance.verified_human));
   document.getElementById('result').classList.remove('hidden');
   document.getElementById('appealCard').classList.remove('hidden');
   document.getElementById('appealMsg').textContent = '';
+}
+
+let challengeId = null;
+
+async function verifyStart() {
+  const creator = document.getElementById('verifyCreator').value;
+  const msg = document.getElementById('verifyMsg');
+  msg.textContent = ''; msg.className = '';
+  if (!creator.trim()) { msg.textContent = 'Enter a creator id.'; msg.className='err'; return; }
+  const res = await fetch('/verify/start', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ creator_id: creator })
+  });
+  const data = await res.json();
+  if (!res.ok) { msg.textContent = data.error || 'Error'; msg.className='err'; return; }
+  challengeId = data.challenge_id;
+  document.getElementById('phrase').textContent = data.phrase;
+  document.getElementById('challengeBox').classList.remove('hidden');
+}
+
+async function verifyComplete() {
+  const response = document.getElementById('pledge').value;
+  const msg = document.getElementById('verifyMsg');
+  msg.textContent = ''; msg.className = '';
+  if (!challengeId) return;
+  const res = await fetch('/verify/complete', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ challenge_id: challengeId, response })
+  });
+  const data = await res.json();
+  if (!res.ok) { msg.textContent = data.error || 'Error'; msg.className='err'; return; }
+  msg.textContent = '✓ ' + data.badge + ' — certificate ' + data.certificate_id +
+    '. Re-analyze this creator’s text to see the badge.';
+  msg.className = 'ok';
+  document.getElementById('challengeBox').classList.add('hidden');
 }
 
 async function appeal() {
