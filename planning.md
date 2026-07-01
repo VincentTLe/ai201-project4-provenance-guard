@@ -297,10 +297,13 @@ The "AI" band starts at a deliberately high 0.70; the "human" band is generous
 (< 0.35). The middle is intentionally wide — we would rather say "uncertain" than
 mislabel a person.
 
-**Disagreement guard.** If the three signals disagree strongly — spread
-(`max − min`) `> 0.40` — the verdict is **capped at `uncertain`** regardless of the
-average, and confidence is reduced. Honest uncertainty beats a confident average
-that papers over a real split between signals.
+**Disagreement guard (asymmetric).** If the three signals disagree strongly — spread
+(`max − min`) `> 0.40` — a would-be **`likely_ai`** verdict is **downgraded to
+`uncertain`** and its confidence cut into the "low" band. Split evidence can *revoke
+an AI accusation but never manufacture one*: it does **not** force a `likely_human`
+verdict to uncertain. This mirrors the false-positive-averse thresholds — the whole
+system leans away from confidently branding a person's work as AI. Honest uncertainty
+beats a confident average that papers over a real split between signals.
 
 **Length floor.** Stylometry needs enough text to be stable:
 - **`< 40` words:** drop the stylometry signal and renormalize the remaining weights

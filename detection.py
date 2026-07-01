@@ -7,9 +7,21 @@ Every signal returns a dict with an `ai_probability` in [0.0, 1.0]
 (0 = reads fully human, 1 = reads fully AI) so they share one scale — see
 planning.md §1.
 """
+import re
+import statistics
+
 from groq import Groq
 
-from config import GROQ_API_KEY, LLM_MODEL
+from config import (
+    AI_THRESHOLD,
+    GROQ_API_KEY,
+    HUMAN_THRESHOLD,
+    LLM_MODEL,
+    SIGNAL_WEIGHTS,
+    VERDICT_AI,
+    VERDICT_HUMAN,
+    VERDICT_UNCERTAIN,
+)
 
 _client = Groq(api_key=GROQ_API_KEY)
 
@@ -86,3 +98,173 @@ def llm_signal(text: str) -> dict:
         return {"ai_probability": 0.5,
                 "rationale": "Could not parse classifier output; abstaining at 0.5."}
     return {"ai_probability": prob, "rationale": _parse_reason(raw)}
+
+
+# ---------------------------------------------------------------------------
+# Signal 2 — Stylometric heuristics (structural). See planning.md §1.
+# Each metric maps to an "AI-likeness" in [0,1] via linear interpolation between
+# two cutoffs; the three are averaged. Cutoffs are starting values, calibrated
+# against the M4 test inputs.
+# ---------------------------------------------------------------------------
+
+_WORD_RE = re.compile(r"[A-Za-z']+")
+_PUNCT_TYPES = [".", ",", ";", ":", "—", "-", "(", ")", "!", "?", "…", '"']
+
+
+def _ramp_down(value: float, one_at: float, zero_at: float) -> float:
+    """1.0 at/below `one_at`, 0.0 at/above `zero_at`, linear between (one_at<zero_at)."""
+    if value <= one_at:
+        return 1.0
+    if value >= zero_at:
+        return 0.0
+    return (zero_at - value) / (zero_at - one_at)
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in re.split(r"[.!?]+", text) if s.strip()]
+
+
+def _words(text: str) -> list[str]:
+    return _WORD_RE.findall(text.lower())
+
+
+def stylometry_signal(text: str) -> dict:
+    """Signal 2 — structural regularity. Returns ai_probability + component metrics."""
+    words = _words(text)
+    sentences = _sentences(text)
+
+    # Sentence-length std-dev (words per sentence). Uniform -> AI-like.
+    sent_lengths = [len(_words(s)) for s in sentences] or [len(words)]
+    sd = statistics.pstdev(sent_lengths) if len(sent_lengths) > 1 else 0.0
+    sd_score = _ramp_down(sd, one_at=3.0, zero_at=12.0)
+
+    # Type-token ratio over first 100 words. Repetitive/low diversity -> AI-like.
+    window = words[:100]
+    ttr = len(set(window)) / len(window) if window else 0.5
+    ttr_score = _ramp_down(ttr, one_at=0.45, zero_at=0.75)
+
+    # Punctuation variety (distinct types). Flat -> AI-like.
+    distinct_punct = sum(1 for p in _PUNCT_TYPES if p in text)
+    punct_score = _ramp_down(float(distinct_punct), one_at=1.0, zero_at=5.0)
+
+    ai_probability = _clamp01((sd_score + ttr_score + punct_score) / 3.0)
+    return {
+        "ai_probability": ai_probability,
+        "metrics": {
+            "sentence_length_sd": round(sd, 2),
+            "type_token_ratio": round(ttr, 3),
+            "distinct_punctuation": distinct_punct,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Signal 3 — Lexical "AI-tell" markers (lexical). See planning.md §1.
+# Density of LLM-favored filler/hedging phrases + repeated bigrams. Lowest weight.
+# ---------------------------------------------------------------------------
+
+_MARKER_PHRASES = [
+    "it is important to note", "it is worth noting", "it's important to note",
+    "furthermore", "moreover", "in conclusion", "in summary", "on the other hand",
+    "when it comes to", "plays a crucial role", "plays a significant role",
+    "a testament to", "in today's", "in the realm of", "the world of", "delve",
+    "navigating the", "it is essential", "it is equally", "ensure responsible",
+    "paradigm shift", "landscape of", "tapestry", "underscores", "multifaceted",
+]
+
+
+def lexical_signal(text: str) -> dict:
+    """Signal 3 — lexical AI-tells. Returns ai_probability + diagnostics."""
+    lowered = text.lower()
+    words = _words(text)
+    n_words = max(1, len(words))
+
+    phrase_hits = sum(lowered.count(p) for p in _MARKER_PHRASES)
+    phrases_per_100 = 100.0 * phrase_hits / n_words
+    phrase_component = _clamp01(phrases_per_100 / 2.5)  # ~2.5 per 100 words -> saturated
+
+    # Repeated-bigram ratio: how much of the text is bigrams seen more than once.
+    bigrams = list(zip(words, words[1:]))
+    repeated = 0
+    seen: dict = {}
+    for bg in bigrams:
+        seen[bg] = seen.get(bg, 0) + 1
+    repeated = sum(c for c in seen.values() if c > 1)
+    rep_ratio = repeated / len(bigrams) if bigrams else 0.0
+    rep_component = _clamp01(rep_ratio / 0.15)  # 15% repeated bigrams -> saturated
+
+    ai_probability = _clamp01(0.6 * phrase_component + 0.4 * rep_component)
+    return {
+        "ai_probability": ai_probability,
+        "diagnostics": {
+            "marker_phrase_hits": phrase_hits,
+            "repeated_bigram_ratio": round(rep_ratio, 3),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Confidence combiner. See planning.md §2: weighted vote, asymmetric thresholds,
+# unified confidence formula, disagreement guard, and length floor.
+# ---------------------------------------------------------------------------
+
+DISAGREEMENT_SPREAD = 0.40
+LENGTH_FLOOR_STYLO = 40   # below this, stylometry is dropped (unreliable)
+LENGTH_FLOOR_FORCE = 15   # below this, force uncertain (too little signal)
+
+
+def _verdict_from_probability(p: float) -> str:
+    if p >= AI_THRESHOLD:
+        return VERDICT_AI
+    if p < HUMAN_THRESHOLD:
+        return VERDICT_HUMAN
+    return VERDICT_UNCERTAIN
+
+
+def combine(llm: float, stylo: float, lexical: float, word_count: int) -> dict:
+    """Merge the three signal probabilities into one calibrated verdict.
+
+    Returns: ai_probability, verdict, confidence, and diagnostics (weights used,
+    signal spread, and any rule notes) — everything the audit log needs.
+    """
+    notes = []
+
+    # --- Length floor: pick which signals are active and their weights ---
+    if word_count < LENGTH_FLOOR_STYLO:
+        active = {"llm": llm, "lexical": lexical}
+        weights = {"llm": SIGNAL_WEIGHTS["llm"], "lexical": SIGNAL_WEIGHTS["lexical"]}
+        notes.append(f"text < {LENGTH_FLOOR_STYLO} words: stylometry dropped, weights renormalized")
+    else:
+        active = {"llm": llm, "stylometric": stylo, "lexical": lexical}
+        weights = dict(SIGNAL_WEIGHTS)
+
+    total_w = sum(weights.values())
+    ai_probability = _clamp01(sum(weights[k] * active[k] for k in active) / total_w)
+
+    verdict = _verdict_from_probability(ai_probability)
+    confidence = _clamp01(2 * abs(ai_probability - 0.5))
+
+    # --- Disagreement guard: a strong split can REVOKE an AI accusation, never
+    # manufacture one. It only downgrades likely_ai -> uncertain (protecting a human
+    # from being confidently mislabeled); it never forces a human verdict to uncertain.
+    # This asymmetry mirrors the false-positive-averse thresholds. See planning.md §2.
+    spread = max(active.values()) - min(active.values())
+    if spread > DISAGREEMENT_SPREAD and verdict == VERDICT_AI:
+        verdict = VERDICT_UNCERTAIN
+        confidence = min(confidence, 0.29)  # forced into the "low" band
+        notes.append(f"signals disagree (spread {spread:.2f} > {DISAGREEMENT_SPREAD}): AI verdict revoked -> uncertain")
+
+    # --- Hard floor: too short to judge at all ---
+    if word_count < LENGTH_FLOOR_FORCE:
+        verdict = VERDICT_UNCERTAIN
+        confidence = min(confidence, 0.15)
+        notes.append(f"text < {LENGTH_FLOOR_FORCE} words: forced uncertain")
+
+    return {
+        "ai_probability": round(ai_probability, 4),
+        "verdict": verdict,
+        "confidence": round(confidence, 4),
+        "weights_used": weights,
+        "signal_spread": round(spread, 4),
+        "notes": notes,
+    }

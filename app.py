@@ -15,28 +15,13 @@ import uuid
 from flask import Flask, jsonify, request
 
 import db
-from config import AI_THRESHOLD, HUMAN_THRESHOLD, VERDICT_AI, VERDICT_HUMAN, VERDICT_UNCERTAIN
-from detection import llm_signal
+from detection import combine, lexical_signal, llm_signal, stylometry_signal
 
 app = Flask(__name__)
 db.init_db()
 
-# M3 placeholders — real values arrive with the confidence combiner (M4) and
-# transparency label (M5).
-PLACEHOLDER_LABEL = "Full transparency label pending multi-signal scoring (Milestone 5)."
-
-
-def _provisional_attribution(ai_probability: float) -> str:
-    """Signal-1-only attribution for M3, using the spec's asymmetric thresholds.
-
-    This is superseded in M4 once all three signals are combined; for now it lets
-    /submit return a real, inspectable attribution from the one working signal.
-    """
-    if ai_probability >= AI_THRESHOLD:
-        return VERDICT_AI
-    if ai_probability < HUMAN_THRESHOLD:
-        return VERDICT_HUMAN
-    return VERDICT_UNCERTAIN
+# M5 placeholder — the reader-facing transparency label is generated in Milestone 5.
+PLACEHOLDER_LABEL = "Transparency label pending (Milestone 5)."
 
 
 @app.route("/submit", methods=["POST"])
@@ -50,13 +35,21 @@ def submit():
 
     content_id = str(uuid.uuid4())
     timestamp = db.utc_now()
+    word_count = len(text.split())
 
-    # --- Signal 1: Groq LLM judge ---
-    signal = llm_signal(text)
-    llm_score = signal["ai_probability"]
+    # --- Multi-signal detection pipeline ---
+    llm = llm_signal(text)
+    stylo = stylometry_signal(text)
+    lexical = lexical_signal(text)
 
-    attribution = _provisional_attribution(llm_score)
-    confidence = None  # placeholder until M4 combines all signals
+    result = combine(
+        llm["ai_probability"],
+        stylo["ai_probability"],
+        lexical["ai_probability"],
+        word_count,
+    )
+    attribution = result["verdict"]
+    confidence = result["confidence"]
     status = "classified"
 
     # --- Persist content record ---
@@ -66,13 +59,15 @@ def submit():
         text=text,
         attribution=attribution,
         confidence=confidence,
-        ai_probability=llm_score,
-        llm_score=llm_score,
+        ai_probability=result["ai_probability"],
+        llm_score=llm["ai_probability"],
+        stylometric_score=stylo["ai_probability"],
+        lexical_score=lexical["ai_probability"],
         status=status,
         created_at=timestamp,
     )
 
-    # --- Structured audit-log entry ---
+    # --- Structured audit-log entry (all three signals + combined result) ---
     db.add_audit_entry(
         content_id,
         "classification",
@@ -82,8 +77,13 @@ def submit():
             "timestamp": timestamp,
             "attribution": attribution,
             "confidence": confidence,
-            "llm_score": llm_score,
-            "llm_rationale": signal["rationale"],
+            "ai_probability": result["ai_probability"],
+            "llm_score": llm["ai_probability"],
+            "stylometric_score": stylo["ai_probability"],
+            "lexical_score": lexical["ai_probability"],
+            "signal_spread": result["signal_spread"],
+            "llm_rationale": llm["rationale"],
+            "scoring_notes": result["notes"],
             "status": status,
         },
     )
@@ -92,9 +92,14 @@ def submit():
         {
             "content_id": content_id,
             "attribution": attribution,
-            "confidence": confidence,  # placeholder (M4)
-            "signals": {"llm": llm_score},
-            "label": PLACEHOLDER_LABEL,  # placeholder (M5)
+            "confidence": confidence,
+            "ai_probability": result["ai_probability"],
+            "signals": {
+                "llm": llm["ai_probability"],
+                "stylometric": stylo["ai_probability"],
+                "lexical": lexical["ai_probability"],
+            },
+            "label": PLACEHOLDER_LABEL,  # real label at M5
         }
     )
 

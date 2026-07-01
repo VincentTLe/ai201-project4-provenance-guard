@@ -69,10 +69,12 @@ def create_content_record(
     confidence: float | None,
     ai_probability: float | None,
     llm_score: float | None,
+    stylometric_score: float | None,
+    lexical_score: float | None,
     status: str,
     created_at: str,
 ) -> None:
-    """Insert a freshly classified submission. Signal-2/3 scores fill in at M4."""
+    """Insert a freshly classified submission with all three signal scores."""
     with _connect() as conn:
         conn.execute(
             """
@@ -80,11 +82,12 @@ def create_content_record(
                 content_id, creator_id, text, attribution, confidence,
                 ai_probability, llm_score, stylometric_score, lexical_score,
                 status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 content_id, creator_id, text, attribution, confidence,
-                ai_probability, llm_score, status, created_at,
+                ai_probability, llm_score, stylometric_score, lexical_score,
+                status, created_at,
             ),
         )
 
