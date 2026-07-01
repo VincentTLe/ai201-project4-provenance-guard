@@ -11,6 +11,7 @@ so both classification and appeal events share one flexible schema. GET /log par
 """
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from config import DB_PATH
@@ -22,6 +23,22 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def _db():
+    """Yield a connection that both commits (via `with conn`) AND closes.
+
+    Note: sqlite3's own connection context manager only manages the transaction —
+    it does not close the connection — so we close it explicitly here to avoid
+    leaking a file handle on every call.
+    """
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def utc_now() -> str:
     """ISO 8601 UTC timestamp, e.g. 2025-04-01T14:32:10.123456+00:00."""
     return datetime.now(timezone.utc).isoformat()
@@ -29,7 +46,7 @@ def utc_now() -> str:
 
 def init_db() -> None:
     """Create tables if they don't exist. Safe to call on every startup."""
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS content_records (
@@ -75,7 +92,7 @@ def create_content_record(
     created_at: str,
 ) -> None:
     """Insert a freshly classified submission with all three signal scores."""
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """
             INSERT INTO content_records (
@@ -93,7 +110,7 @@ def create_content_record(
 
 
 def get_content_record(content_id: str) -> dict | None:
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute(
             "SELECT * FROM content_records WHERE content_id = ?", (content_id,)
         ).fetchone()
@@ -102,7 +119,7 @@ def get_content_record(content_id: str) -> dict | None:
 
 def add_audit_entry(content_id: str, event_type: str, detail: dict) -> None:
     """Append one structured event (classification or appeal) to the audit log."""
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             "INSERT INTO audit_log (content_id, event_type, timestamp, detail) "
             "VALUES (?, ?, ?, ?)",
@@ -113,7 +130,7 @@ def add_audit_entry(content_id: str, event_type: str, detail: dict) -> None:
 
 def get_recent_log(limit: int = 20) -> list[dict]:
     """Return the most recent audit entries (newest first), detail flattened in."""
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute(
             "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()

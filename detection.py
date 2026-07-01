@@ -108,7 +108,9 @@ def llm_signal(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 _WORD_RE = re.compile(r"[A-Za-z']+")
-_PUNCT_TYPES = [".", ",", ";", ":", "—", "-", "(", ")", "!", "?", "…", '"']
+# The 11 punctuation types from planning.md §1 (no plain hyphen — it's too common
+# in ordinary prose and would water down the metric's discriminative power).
+_PUNCT_TYPES = [".", ",", ";", ":", "—", "(", ")", "!", "?", "…", '"']
 
 
 def _ramp_down(value: float, one_at: float, zero_at: float) -> float:

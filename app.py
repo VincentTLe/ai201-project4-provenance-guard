@@ -27,9 +27,15 @@ PLACEHOLDER_LABEL = "Transparency label pending (Milestone 5)."
 @app.route("/submit", methods=["POST"])
 def submit():
     data = request.get_json(silent=True) or {}
-    text = (data.get("text") or "").strip()
-    creator_id = (data.get("creator_id") or "").strip()
+    raw_text = data.get("text")
+    raw_creator = data.get("creator_id")
 
+    # Both fields must be non-empty strings. Guard against non-string JSON values
+    # (e.g. numbers, lists) so they return a clean 400 rather than crashing on .strip().
+    if not isinstance(raw_text, str) or not isinstance(raw_creator, str):
+        return jsonify({"error": "'text' and 'creator_id' must be strings."}), 400
+    text = raw_text.strip()
+    creator_id = raw_creator.strip()
     if not text or not creator_id:
         return jsonify({"error": "Both 'text' and 'creator_id' are required."}), 400
 
